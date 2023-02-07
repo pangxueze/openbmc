@@ -1,3 +1,2 @@
-FILESEXTRAPATHS_prepend := "${THISDIR}/files:"
-SPLASH_IMAGES_append_rpi = " file://psplash-raspberrypi-img.h;outsuffix=raspberrypi"
-ALTERNATIVE_PRIORITY_psplash-raspberrypi[psplash] = "200"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+SPLASH_IMAGES:rpi = "file://psplash-raspberrypi-img.h;outsuffix=raspberrypi"

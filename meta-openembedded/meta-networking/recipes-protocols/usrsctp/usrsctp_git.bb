@@ -8,6 +8,8 @@ SRC_URI = "git://github.com/sctplab/usrsctp;protocol=https;branch=master \
 
 S = "${WORKDIR}/git"
 
+UPSTREAM_CHECK_COMMITS = "1"
+
 inherit autotools pkgconfig
 
 DEPENDS += "openssl"
@@ -21,3 +23,5 @@ PACKAGECONFIG[inet] = "--enable-inet,--disable-inet,"
 PACKAGECONFIG[inet6] = "--enable-inet6,--disable-inet6,"
 
 EXTRA_OECONF += "--disable-debug"
+
+CVE_VERSION = "0.9.3.0"

@@ -488,7 +488,7 @@ class LRParser:
                     # --! DEBUG
                     return result
 
-            if t == None:
+            if t is None:
 
                 # --! DEBUG
                 debug.error('Error  : %s',
@@ -766,7 +766,7 @@ class LRParser:
                     n = symstack[-1]
                     return getattr(n,"value",None)
 
-            if t == None:
+            if t is None:
 
                 # We have some kind of parsing error here.  To handle
                 # this, we are going to push the current token onto
@@ -1021,7 +1021,7 @@ class LRParser:
                     n = symstack[-1]
                     return getattr(n,"value",None)
 
-            if t == None:
+            if t is None:
 
                 # We have some kind of parsing error here.  To handle
                 # this, we are going to push the current token onto
@@ -1205,7 +1205,7 @@ class Production(object):
 
         # Precompute the list of productions immediately following.  Hack. Remove later
         try:
-            p.lr_after = Prodnames[p.prod[n+1]]
+            p.lr_after = self.Prodnames[p.prod[n+1]]
         except (IndexError,KeyError):
             p.lr_after = []
         try:
@@ -2797,11 +2797,15 @@ class ParserReflect(object):
     # Compute a signature over the grammar
     def signature(self):
         try:
-            from hashlib import md5
+            import hashlib
         except ImportError:
-            from md5 import md5
+            raise RuntimeError("Unable to import hashlib")
         try:
-            sig = md5()
+            sig = hashlib.new('MD5', usedforsecurity=False)
+        except TypeError:
+            # Some configurations don't appear to support two arguments
+            sig = hashlib.new('MD5')
+        try:
             if self.start:
                 sig.update(self.start.encode('latin-1'))
             if self.prec:

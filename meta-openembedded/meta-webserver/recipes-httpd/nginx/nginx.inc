@@ -21,14 +21,15 @@ SRC_URI = " \
     file://nginx.init \
     file://nginx-volatile.conf \
     file://nginx.service \
+    file://nginx-fix-pidfile.patch \
 "
 
 inherit siteinfo update-rc.d useradd systemd
 
-SYSTEMD_SERVICE_${PN} = "nginx.service"
+SYSTEMD_SERVICE:${PN} = "nginx.service"
 
-CFLAGS_append = " -fPIE -pie"
-CXXFLAGS_append = " -fPIE -pie"
+CFLAGS:append = " -fPIE -pie"
+CXXFLAGS:append = " -fPIE -pie"
 
 NGINX_WWWDIR ?= "${localstatedir}/www/localhost"
 NGINX_USER   ?= "www"
@@ -36,11 +37,13 @@ NGINX_USER   ?= "www"
 EXTRA_OECONF = ""
 DISABLE_STATIC = ""
 
-PACKAGECONFIG ??= "ssl"
+PACKAGECONFIG ??= "ssl ${@bb.utils.filter('DISTRO_FEATURES', 'ipv6', d)}"
 
+PACKAGECONFIG[gunzip] = "--with-http_gunzip_module,,"
 PACKAGECONFIG[http2] = "--with-http_v2_module,,"
 PACKAGECONFIG[ssl] = "--with-http_ssl_module,,openssl"
 PACKAGECONFIG[http-auth-request] = "--with-http_auth_request_module,,"
+PACKAGECONFIG[ipv6] = "--with-ipv6,,"
 
 do_configure () {
     if [ "${SITEINFO_BITS}" = "64" ]; then
@@ -64,7 +67,7 @@ do_configure () {
     --with-ptr-size=${PTRSIZE} \
     --with-sig-atomic-t=${PTRSIZE} \
     --with-size-t=${PTRSIZE} \
-    --with-off-t=${PTRSIZE} \
+    --with-off-t=8 \
     --with-time-t=${PTRSIZE} \
     --with-sys-nerr=132 \
     --conf-path=${sysconfdir}/nginx/nginx.conf \
@@ -89,11 +92,11 @@ do_install () {
         install -d ${D}${sysconfdir}/tmpfiles.d
         echo "d /run/${BPN} - - - -" \
             > ${D}${sysconfdir}/tmpfiles.d/${BPN}.conf
-        echo "d /${localstatedir}/log/${BPN} 0755 root root -" \
+        echo "d ${localstatedir}/log/${BPN} 0755 root root -" \
             >> ${D}${sysconfdir}/tmpfiles.d/${BPN}.conf
     fi
     install -d ${D}${sysconfdir}/${BPN}
-    lnr ${D}${localstatedir}/run/${BPN} ${D}${sysconfdir}/${BPN}/run
+    ln -rs ${D}${localstatedir}/run/${BPN} ${D}${sysconfdir}/${BPN}/run
     install -d ${D}${NGINX_WWWDIR}
     mv ${D}${exec_prefix}/html ${D}${NGINX_WWWDIR}/
     chown ${NGINX_USER}:www-data -R ${D}${NGINX_WWWDIR}
@@ -138,9 +141,11 @@ do_install () {
             -e 's,@BASE_BINDIR@,${base_bindir},g' \
             ${D}${systemd_unitdir}/system/nginx.service
     fi
+
+    rm -rf ${D}${localstatedir}/log/
 }
 
-pkg_postinst_${PN} () {
+pkg_postinst:${PN} () {
     if [ -z "$D" ]; then
         if type systemd-tmpfiles >/dev/null; then
             systemd-tmpfiles --create
@@ -150,12 +155,12 @@ pkg_postinst_${PN} () {
     fi
 }
 
-FILES_${PN} += " \
+FILES:${PN} += " \
     ${localstatedir}/ \
     ${systemd_unitdir}/system/nginx.service \
 "
 
-CONFFILES_${PN} = " \
+CONFFILES:${PN} = " \
     ${sysconfdir}/nginx/nginx.conf \
     ${sysconfdir}/nginx/fastcgi.conf \
     ${sysconfdir}/nginx/fastcgi_params \
@@ -171,7 +176,7 @@ INITSCRIPT_NAME = "nginx"
 INITSCRIPT_PARAMS = "defaults 92 20"
 
 USERADD_PACKAGES = "${PN}"
-USERADD_PARAM_${PN} = " \
+USERADD_PARAM:${PN} = " \
     --system --no-create-home \
     --home ${NGINX_WWWDIR} \
     --groups www-data \

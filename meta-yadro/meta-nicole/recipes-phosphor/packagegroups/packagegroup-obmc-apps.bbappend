@@ -1,2 +1,7 @@
-RDEPENDS_${PN}-inventory_append = " openpower-occ-control"
-RDEPENDS_${PN}-extras += " phosphor-hostlogger openpower-esel-parser"
+RDEPENDS:${PN}-inventory:append = " openpower-occ-control"
+RDEPENDS:${PN}-extras:append = " \
+    phosphor-hostlogger \
+"
+RDEPENDS:${PN}-software:append = " \
+    obmc-yadro-fwupdate \
+"

@@ -18,11 +18,10 @@ EFI_PROVIDER ??= "grub-efi"
 
 SYSVINIT_SCRIPTS = "${@bb.utils.contains('MACHINE_FEATURES', 'rtc', '${VIRTUAL-RUNTIME_base-utils-hwclock}', '', d)} \
                     modutils-initscripts \
-                    init-ifupdown \
                     ${VIRTUAL-RUNTIME_initscripts} \
                    "
 
-RDEPENDS_${PN} = "\
+RDEPENDS:${PN} = "\
     base-files \
     base-passwd \
     ${VIRTUAL-RUNTIME_base-utils} \
@@ -36,6 +35,7 @@ RDEPENDS_${PN} = "\
     ${VIRTUAL-RUNTIME_update-alternatives} \
     ${MACHINE_ESSENTIAL_EXTRA_RDEPENDS}"
 
-RRECOMMENDS_${PN} = "\
+RRECOMMENDS:${PN} = "\
     ${VIRTUAL-RUNTIME_base-utils-syslog} \
-    ${MACHINE_ESSENTIAL_EXTRA_RRECOMMENDS}"
+    ${MACHINE_ESSENTIAL_EXTRA_RRECOMMENDS} \
+    ${@bb.utils.contains("DISTRO_FEATURES", "sysvinit", "init-ifupdown", "", d)}"

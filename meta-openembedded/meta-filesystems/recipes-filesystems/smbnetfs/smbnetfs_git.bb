@@ -4,22 +4,21 @@ DESCRIPTION = "SMBNetFS is a Linux/FreeBSD filesystem that allow you to use \
                neighborhood in Microsoft Windows. Please donate me to help \
                in SMBNetFS development."
 
-LICENSE = "GPLv2"
+LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=eb723b61539feef013de476e68b5c50a"
 HOMEPAGE ="http://sourceforge.net/projects/smbnetfs"
 
 DEPENDS = "fuse samba"
-DEPENDS_append_libc-musl = " libexecinfo"
+DEPENDS:append:libc-musl = " libexecinfo"
+
+inherit autotools pkgconfig features_check
 
 # samba depends on libpam
-inherit features_check
 REQUIRED_DISTRO_FEATURES = "pam"
 
-inherit autotools gitpkgv pkgconfig
+PV = "0.6.3"
 
-PKGV = "${GITPKGVTAG}"
-
-SRCREV = "bc6b94b015fdaf7c4dab56ccb996eecea8bc4373"
+SRCREV = "736d5e599df3bebce3450125118ac2e70358b0c9"
 
 SRC_URI = "git://smbnetfs.git.sourceforge.net/gitroot/smbnetfs/smbnetfs;branch=master \
            file://configure.patch \
@@ -30,4 +29,4 @@ PACKAGECONFIG[libsecret] = "--with-libsecret=yes,--with-libsecret=no,libsecret"
 
 S = "${WORKDIR}/git"
 
-LDFLAGS_append_libc-musl = " -lexecinfo"
+LDFLAGS:append:libc-musl = " -lexecinfo"

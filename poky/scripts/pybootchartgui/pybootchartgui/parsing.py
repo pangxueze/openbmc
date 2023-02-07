@@ -18,7 +18,7 @@ import string
 import re
 import sys
 import tarfile
-from time import clock
+import time
 from collections import defaultdict
 from functools import reduce
 
@@ -49,6 +49,9 @@ class Trace:
         self.parent_map = None
         self.mem_stats = []
         self.monitor_disk = None
+        self.cpu_pressure = []
+        self.io_pressure = []
+        self.mem_pressure = []
         self.times = [] # Always empty, but expected by draw.py when drawing system charts.
 
         if len(paths):
@@ -554,6 +557,29 @@ def _parse_monitor_disk_log(file):
 
     return disk_stats
 
+def _parse_pressure_logs(file, filename):
+    """
+    Parse file for "some" pressure with 'avg10', 'avg60' 'avg300' and delta total values
+    (in that order) directly stored on one line for both CPU and IO, based on filename.
+    """
+    pressure_stats = []
+    if filename == "cpu.log":
+        SamplingClass = CPUPressureSample
+    elif filename == "memory.log":
+        SamplingClass = MemPressureSample
+    else:
+        SamplingClass = IOPressureSample
+    for time, lines in _parse_timed_blocks(file):
+        for line in lines:
+            if not line: continue
+            tokens = line.split()
+            avg10 = float(tokens[0])
+            avg60 = float(tokens[1])
+            avg300 = float(tokens[2])
+            delta = float(tokens[3])
+            pressure_stats.append(SamplingClass(time, avg10, avg60, avg300, delta))
+
+    return pressure_stats
 
 # if we boot the kernel with: initcall_debug printk.time=1 we can
 # get all manner of interesting data from the dmesg output
@@ -723,7 +749,7 @@ def get_num_cpus(headers):
 
 def _do_parse(writer, state, filename, file):
     writer.info("parsing '%s'" % filename)
-    t1 = clock()
+    t1 = time.process_time()
     name = os.path.basename(filename)
     if name == "proc_diskstats.log":
         state.disk_stats = _parse_proc_disk_stat_log(file)
@@ -741,9 +767,16 @@ def _do_parse(writer, state, filename, file):
         state.cmdline = _parse_cmdline_log(writer, file)
     elif name == "monitor_disk.log":
         state.monitor_disk = _parse_monitor_disk_log(file)
+    #pressure logs are in a subdirectory
+    elif name == "cpu.log":
+        state.cpu_pressure = _parse_pressure_logs(file, name)
+    elif name == "io.log":
+        state.io_pressure = _parse_pressure_logs(file, name)
+    elif name == "memory.log":
+        state.mem_pressure = _parse_pressure_logs(file, name)
     elif not filename.endswith('.log'):
         _parse_bitbake_buildstats(writer, state, filename, file)
-    t2 = clock()
+    t2 = time.process_time()
     writer.info("  %s seconds" % str(t2-t1))
     return state
 

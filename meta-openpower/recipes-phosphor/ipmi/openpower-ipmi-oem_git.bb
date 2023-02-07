@@ -7,17 +7,18 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=86d3f3a95c324c9479bd8986968f4327"
 
 inherit autotools pkgconfig
 inherit obmc-phosphor-ipmiprovider-symlink
-inherit pythonnative
+inherit python3native
 
-require ${PN}.inc
+require ${BPN}.inc
 
 DEPENDS += "phosphor-ipmi-host"
 DEPENDS += "autoconf-archive-native"
-DEPENDS += "sdbusplus sdbusplus-native"
+DEPENDS += "sdbusplus"
+DEPENDS += "${PYTHON_PN}-sdbus++-native"
+DEPENDS += "${PYTHON_PN}-mako-native"
+DEPENDS += "${PYTHON_PN}-pyyaml-native"
 DEPENDS += "phosphor-logging"
-DEPENDS += "phosphor-dbus-interfaces phosphor-dbus-interfaces-native"
-DEPENDS += "openpower-dbus-interfaces openpower-dbus-interfaces-native"
-DEPENDS += "sdbus++-native"
+DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "virtual/phosphor-ipmi-inventory-sel"
 
 TARGET_CFLAGS += "-fpic"
@@ -30,6 +31,6 @@ EXTRA_OECONF = " \
 
 S = "${WORKDIR}/git"
 
-FILES_${PN}_append = " ${libdir}/ipmid-providers/lib*${SOLIBS}"
-FILES_${PN}_append = " ${libdir}/host-ipmid/lib*${SOLIBS}"
-FILES_${PN}-dev_append = " ${libdir}/ipmid-providers/lib*${SOLIBSDEV} ${libdir}/ipmid-providers/*.la"
+FILES:${PN}:append = " ${libdir}/ipmid-providers/lib*${SOLIBS}"
+FILES:${PN}:append = " ${libdir}/host-ipmid/lib*${SOLIBS}"
+FILES:${PN}-dev:append = " ${libdir}/ipmid-providers/lib*${SOLIBSDEV} ${libdir}/ipmid-providers/*.la"

@@ -1,21 +1,40 @@
-FILES_${PN}-catalog-extralocales = \
-            "${exec_prefix}/lib/systemd/catalog/*.*.catalog"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+PACKAGECONFIG = "\
+        cgroupv2 \
+        coredump \
+        hostnamed \
+        networkd \
+        nss \
+        pam \
+        randomseed \
+        resolved \
+        seccomp \
+        sysusers \
+        timedated \
+        timesyncd \
+        zstd \
+        "
+
+EXTRA_OEMESON:append = " -Ddns-servers=''"
+
 PACKAGES =+ "${PN}-catalog-extralocales"
-PACKAGECONFIG = "pam hostnamed networkd randomseed resolved sysusers timedated \
-                 timesyncd xz kmod"
 
-FILESEXTRAPATHS_prepend := "${THISDIR}/${PN}:"
-SRC_URI += "file://default.network"
-SRC_URI += "file://0001-sd-bus-Don-t-automatically-add-ObjectManager.patch"
+RRECOMMENDS:${PN}:append:openbmc-phosphor = " phosphor-systemd-policy"
 
-RRECOMMENDS_${PN} += "obmc-targets"
-FILES_${PN} += "${systemd_unitdir}/network/default.network"
+FILES:${PN}-catalog-extralocales = "\
+    ${exec_prefix}/lib/systemd/catalog/*.*.catalog \
+"
 
-do_install_append() {
-        install -m 644 ${WORKDIR}/default.network ${D}${systemd_unitdir}/network/
-}
+# udev is added to the USERADD_PACKAGES due to some 'render' group
+# being necessary to create for /dev/dri handling, which we don't
+# have to worry about.  A side-effect of this is udev would RDEPEND on
+# 'shadow' which prevents us from putting it into the initramfs.  We
+# have plenty of other stuff that RDEPENDS on 'shadow' so, remove udev
+# from USERADD_PACKAGES to get around that.
+USERADD_PACKAGES:remove = "udev"
 
-ALTERNATIVE_${PN} += "init"
-ALTERNATIVE_TARGET[init] = "${rootlibexecdir}/systemd/systemd"
 ALTERNATIVE_LINK_NAME[init] = "${base_sbindir}/init"
 ALTERNATIVE_PRIORITY[init] ?= "300"
+
+ALTERNATIVE:${PN} += "init"
+ALTERNATIVE_TARGET[init] = "${rootlibexecdir}/systemd/systemd"

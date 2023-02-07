@@ -444,7 +444,7 @@ class BuildPerfTestCase(unittest.TestCase):
         buildstats = []
         for fname in os.listdir(bs_dir):
             recipe_dir = os.path.join(bs_dir, fname)
-            if not os.path.isdir(recipe_dir):
+            if not os.path.isdir(recipe_dir) or fname == "reduced_proc_pressure":
                 continue
             name, epoch, version, revision = split_nevr(fname)
             recipe_bs = OrderedDict((('name', name),
@@ -462,7 +462,7 @@ class BuildPerfTestCase(unittest.TestCase):
     def rm_tmp(self):
         """Cleanup temporary/intermediate files and directories"""
         log.debug("Removing temporary and cache files")
-        for name in ['bitbake.lock', 'conf/sanity_info',
+        for name in ['bitbake.lock', 'cache/sanity_info',
                      self.bb_vars['TMPDIR']]:
             oe.path.remove(name, recurse=True)
 

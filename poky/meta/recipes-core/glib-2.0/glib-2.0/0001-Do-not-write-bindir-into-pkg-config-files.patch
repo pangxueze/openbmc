@@ -1,4 +1,4 @@
-From 60b36289ac314ad972cf81c1acd19f6f2e58ff25 Mon Sep 17 00:00:00 2001
+From 4a41bf7b050168726cc4fad4c1c72fc7c18ab779 Mon Sep 17 00:00:00 2001
 From: Alexander Kanavin <alex.kanavin@gmail.com>
 Date: Fri, 15 Feb 2019 11:17:27 +0100
 Subject: [PATCH] Do not write $bindir into pkg-config files
@@ -16,16 +16,16 @@ Signed-off-by: Alexander Kanavin <alex.kanavin@gmail.com>
  2 files changed, 11 insertions(+), 11 deletions(-)
 
 diff --git a/gio/meson.build b/gio/meson.build
-index 71e88c4..8ce3987 100644
+index 36b5bad..137e75a 100644
 --- a/gio/meson.build
 +++ b/gio/meson.build
-@@ -831,14 +831,14 @@ pkg.generate(libgio,
+@@ -862,14 +862,14 @@ pkg.generate(libgio,
                 'schemasdir=' + join_paths('${datadir}', schemas_subdir),
                 'bindir=' + join_paths('${prefix}', get_option('bindir')),
-                'giomoduledir=' + giomodulesdir,
+                'giomoduledir=' + pkgconfig_giomodulesdir,
 -               'gio=' + join_paths('${bindir}', 'gio'),
--               'gio_querymodules=' + join_paths('${bindir}', 'gio-querymodules'),
--               'glib_compile_schemas=' + join_paths('${bindir}', 'glib-compile-schemas'),
+-               'gio_querymodules=@0@'.format(pkgconfig_multiarch_bindir / 'gio-querymodules'),
+-               'glib_compile_schemas=@0@'.format(pkgconfig_multiarch_bindir / 'glib-compile-schemas'),
 -               'glib_compile_resources=' + join_paths('${bindir}', 'glib-compile-resources'),
 -               'gdbus=' + join_paths('${bindir}', 'gdbus'),
 -               'gdbus_codegen=' + join_paths('${bindir}', 'gdbus-codegen'),
@@ -43,10 +43,10 @@ index 71e88c4..8ce3987 100644
    install_dir : glib_pkgconfigreldir,
    filebase : 'gio-2.0',
 diff --git a/glib/meson.build b/glib/meson.build
-index 91a48f1..978fb73 100644
+index c365901..c3d6601 100644
 --- a/glib/meson.build
 +++ b/glib/meson.build
-@@ -375,9 +375,9 @@ pkg.generate(libglib,
+@@ -397,9 +397,9 @@ pkg.generate(libglib,
    subdirs : ['glib-2.0'],
    extra_cflags : ['-I${libdir}/glib-2.0/include'] + win32_cflags,
    variables : ['bindir=' + join_paths('${prefix}', get_option('bindir')),

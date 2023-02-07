@@ -4,34 +4,40 @@ d-bus objects to represent various user settings."
 PR = "r1"
 PV = "1.0+git${SRCPV}"
 
-inherit autotools
+inherit autotools pkgconfig
 inherit obmc-phosphor-dbus-service
-inherit pythonnative
+inherit python3native
 inherit phosphor-settings-manager
 
 require phosphor-settings-manager.inc
 
-DBUS_SERVICE_${PN} = "xyz.openbmc_project.Settings.service"
+DBUS_SERVICE:${PN} = "xyz.openbmc_project.Settings.service"
 
-DEPENDS += "python-pyyaml-native"
-DEPENDS += "python-mako-native"
+DEPENDS += "${PYTHON_PN}-pyyaml-native"
+DEPENDS += "${PYTHON_PN}-mako-native"
+DEPENDS += "${PYTHON_PN}-sdbus++-native"
 DEPENDS += "autoconf-archive-native"
 DEPENDS += "virtual/phosphor-settings-defaults"
-DEPENDS += "${@df_enabled(d, 'obmc-mrw', 'phosphor-settings-read-settings-mrw-native')}"
-DEPENDS += "sdbusplus sdbusplus-native"
-DEPENDS += "phosphor-dbus-interfaces phosphor-dbus-interfaces-native"
+DEPENDS += "${@bb.utils.contains('DISTRO_FEATURES', 'obmc-mrw', 'phosphor-settings-read-settings-mrw-native', '', d)}"
+DEPENDS += "sdbusplus"
+DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "phosphor-logging"
 DEPENDS += "libcereal"
 
 S = "${WORKDIR}/git"
 SRC_URI += "file://merge_settings.py"
 
+# 'boot_type' configuration parameter is used to add support for
+# the Legacy/EFI boot override selector for systems with x86 host
+PACKAGECONFIG[boot_type] = ""
+SRC_URI += "${@bb.utils.contains('PACKAGECONFIG', 'boot_type', 'file://boot_type.override.yml', '', d)}"
+
 EXTRA_OECONF = " \
              SETTINGS_YAML=${STAGING_DIR_NATIVE}${settings_datadir}/defaults.yaml \
              "
 
-# Collect files in SRC_URI that end in ".override.yml" and call a script that
-# writes their contents over that of settings.yaml, which is then updated to
+# Collect files in SRC_URI that end in ".override.yml" or ".remove.yml" and call a script that
+# writes/removes their contents from that of settings.yaml, which is then updated to
 # the merged data values.
 # This doesn't correctly handle globs in ".override.yml" entries in SRC_URI.
 python do_merge_settings () {
@@ -47,12 +53,12 @@ python do_merge_settings () {
     cmd.append(os.path.join(workdir, 'merge_settings.py'))
     cmd.append(os.path.join(settingsdir, 'defaults.yaml'))
     # Used for any settings from the MRW
-    use_mrw = df_enabled(d, 'obmc-mrw', 'true')
+    use_mrw = bb.utils.contains('DISTRO_FEATURES', 'obmc-mrw', 'true', '', d)
     if (use_mrw == 'true'):
         cmd.append(os.path.join(settingsdir, 'mrw-settings.override.yaml'))
 
     fetch = bb.fetch2.Fetch([], d)
-    override_urls = [url for url in fetch.urls if url.endswith('.override.yml')]
+    override_urls = [url for url in fetch.urls if url.endswith(('.override.yml', '.remove.yml'))]
     for url in override_urls:
         bb.debug(2, 'Overriding with source: ' + url)
         local_base = os.path.basename(fetch.localpath(url))

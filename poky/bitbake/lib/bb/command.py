@@ -20,6 +20,7 @@ Commands are queued in a CommandQueue
 
 from collections import OrderedDict, defaultdict
 
+import io
 import bb.event
 import bb.cooker
 import bb.remotedata
@@ -50,53 +51,73 @@ class Command:
     """
     A queue of asynchronous commands for bitbake
     """
-    def __init__(self, cooker):
+    def __init__(self, cooker, process_server):
         self.cooker = cooker
         self.cmds_sync = CommandsSync()
         self.cmds_async = CommandsAsync()
-        self.remotedatastores = bb.remotedata.RemoteDatastores(cooker)
+        self.remotedatastores = None
 
-        # FIXME Add lock for this
+        self.process_server = process_server
+        # Access with locking using process_server.{get/set/clear}_async_cmd()
         self.currentAsyncCommand = None
 
-    def runCommand(self, commandline, ro_only = False):
+    def runCommand(self, commandline, process_server, ro_only=False):
         command = commandline.pop(0)
+
+        # Ensure cooker is ready for commands
+        if command != "updateConfig" and command != "setFeatures":
+            try:
+                self.cooker.init_configdata()
+                if not self.remotedatastores:
+                    self.remotedatastores = bb.remotedata.RemoteDatastores(self.cooker)
+            except (Exception, SystemExit) as exc:
+                import traceback
+                if isinstance(exc, bb.BBHandledException):
+                    # We need to start returning real exceptions here. Until we do, we can't
+                    # tell if an exception is an instance of bb.BBHandledException
+                    return None, "bb.BBHandledException()\n" + traceback.format_exc()
+                return None, traceback.format_exc()
+
         if hasattr(CommandsSync, command):
             # Can run synchronous commands straight away
             command_method = getattr(self.cmds_sync, command)
             if ro_only:
-                if not hasattr(command_method, 'readonly') or False == getattr(command_method, 'readonly'):
+                if not hasattr(command_method, 'readonly') or not getattr(command_method, 'readonly'):
                     return None, "Not able to execute not readonly commands in readonly mode"
             try:
-                self.cooker.process_inotify_updates()
+                self.cooker.process_inotify_updates_apply()
                 if getattr(command_method, 'needconfig', True):
                     self.cooker.updateCacheSync()
                 result = command_method(self, commandline)
             except CommandError as exc:
                 return None, exc.args[0]
-            except (Exception, SystemExit):
+            except (Exception, SystemExit) as exc:
                 import traceback
+                if isinstance(exc, bb.BBHandledException):
+                    # We need to start returning real exceptions here. Until we do, we can't
+                    # tell if an exception is an instance of bb.BBHandledException
+                    return None, "bb.BBHandledException()\n" + traceback.format_exc()
                 return None, traceback.format_exc()
             else:
                 return result, None
-        if self.currentAsyncCommand is not None:
-            return None, "Busy (%s in progress)" % self.currentAsyncCommand[0]
         if command not in CommandsAsync.__dict__:
             return None, "No such command"
-        self.currentAsyncCommand = (command, commandline)
-        self.cooker.configuration.server_register_idlecallback(self.cooker.runCommands, self.cooker)
+        if not process_server.set_async_cmd((command, commandline)):
+            return None, "Busy (%s in progress)" % self.process_server.get_async_cmd()[0]
+        self.cooker.idleCallBackRegister(self.runAsyncCommand, process_server)
         return True, None
 
-    def runAsyncCommand(self):
+    def runAsyncCommand(self, _, process_server, halt):
         try:
-            self.cooker.process_inotify_updates()
+            self.cooker.process_inotify_updates_apply()
             if self.cooker.state in (bb.cooker.state.error, bb.cooker.state.shutdown, bb.cooker.state.forceshutdown):
                 # updateCache will trigger a shutdown of the parser
                 # and then raise BBHandledException triggering an exit
                 self.cooker.updateCache()
-                return False
-            if self.currentAsyncCommand is not None:
-                (command, options) = self.currentAsyncCommand
+                return bb.server.process.idleFinish("Cooker in error state")
+            cmd = process_server.get_async_cmd()
+            if cmd is not None:
+                (command, options) = cmd
                 commandmethod = getattr(CommandsAsync, command)
                 needcache = getattr( commandmethod, "needcache" )
                 if needcache and self.cooker.state != bb.cooker.state.running:
@@ -106,24 +127,21 @@ class Command:
                     commandmethod(self.cmds_async, self, options)
                     return False
             else:
-                return False
+                return bb.server.process.idleFinish("Nothing to do, no async command?")
         except KeyboardInterrupt as exc:
-            self.finishAsyncCommand("Interrupted")
-            return False
+            return bb.server.process.idleFinish("Interrupted")
         except SystemExit as exc:
             arg = exc.args[0]
             if isinstance(arg, str):
-                self.finishAsyncCommand(arg)
+                return bb.server.process.idleFinish(arg)
             else:
-                self.finishAsyncCommand("Exited with %s" % arg)
-            return False
+                return bb.server.process.idleFinish("Exited with %s" % arg)
         except Exception as exc:
             import traceback
             if isinstance(exc, bb.BBHandledException):
-                self.finishAsyncCommand("")
+                return bb.server.process.idleFinish("")
             else:
-                self.finishAsyncCommand(traceback.format_exc())
-            return False
+                return bb.server.process.idleFinish(traceback.format_exc())
 
     def finishAsyncCommand(self, msg=None, code=None):
         if msg or msg == "":
@@ -132,17 +150,12 @@ class Command:
             bb.event.fire(CommandExit(code), self.cooker.data)
         else:
             bb.event.fire(CommandCompleted(), self.cooker.data)
-        self.currentAsyncCommand = None
         self.cooker.finishcommand()
+        self.process_server.clear_async_cmd()
 
     def reset(self):
-        self.remotedatastores = bb.remotedata.RemoteDatastores(self.cooker)
-
-def split_mc_pn(pn):
-    if pn.startswith("multiconfig:"):
-        _, mc, pn = pn.split(":", 2)
-        return (mc, pn)
-    return ('', pn)
+        if self.remotedatastores:
+           self.remotedatastores = bb.remotedata.RemoteDatastores(self.cooker)
 
 class CommandsSync:
     """
@@ -150,6 +163,12 @@ class CommandsSync:
     These should run quickly so as not to hurt interactive performance.
     These must not influence any running synchronous command.
     """
+
+    def ping(self, command, params):
+        """
+        Allow a UI to check the server is still alive
+        """
+        return "Still alive!"
 
     def stateShutdown(self, command, params):
         """
@@ -232,7 +251,11 @@ class CommandsSync:
 
     def matchFile(self, command, params):
         fMatch = params[0]
-        return command.cooker.matchFile(fMatch)
+        try:
+            mc = params[0]
+        except IndexError:
+            mc = ''
+        return command.cooker.matchFile(fMatch, mc)
     matchFile.needconfig = False
 
     def getUIHandlerNum(self, command, params):
@@ -395,30 +418,50 @@ class CommandsSync:
     def getSkippedRecipes(self, command, params):
         # Return list sorted by reverse priority order
         import bb.cache
-        skipdict = OrderedDict(sorted(command.cooker.skiplist.items(),
-                                      key=lambda x: (-command.cooker.collection.calc_bbfile_priority(bb.cache.virtualfn2realfn(x[0])[0]), x[0])))
+        def sortkey(x):
+            vfn, _ = x
+            realfn, _, mc = bb.cache.virtualfn2realfn(vfn)
+            return (-command.cooker.collections[mc].calc_bbfile_priority(realfn)[0], vfn)
+
+        skipdict = OrderedDict(sorted(command.cooker.skiplist.items(), key=sortkey))
         return list(skipdict.items())
     getSkippedRecipes.readonly = True
 
     def getOverlayedRecipes(self, command, params):
-        return list(command.cooker.collection.overlayed.items())
+        try:
+            mc = params[0]
+        except IndexError:
+            mc = ''
+        return list(command.cooker.collections[mc].overlayed.items())
     getOverlayedRecipes.readonly = True
 
     def getFileAppends(self, command, params):
         fn = params[0]
-        return command.cooker.collection.get_file_appends(fn)
+        try:
+            mc = params[1]
+        except IndexError:
+            mc = ''
+        return command.cooker.collections[mc].get_file_appends(fn)
     getFileAppends.readonly = True
 
     def getAllAppends(self, command, params):
-        return command.cooker.collection.bbappends
+        try:
+            mc = params[0]
+        except IndexError:
+            mc = ''
+        return command.cooker.collections[mc].bbappends
     getAllAppends.readonly = True
 
     def findProviders(self, command, params):
-        return command.cooker.findProviders()
+        try:
+            mc = params[0]
+        except IndexError:
+            mc = ''
+        return command.cooker.findProviders(mc)
     findProviders.readonly = True
 
     def findBestProvider(self, command, params):
-        (mc, pn) = split_mc_pn(params[0])
+        (mc, pn) = bb.runqueue.split_mc(params[0])
         return command.cooker.findBestProvider(pn, mc)
     findBestProvider.readonly = True
 
@@ -446,85 +489,55 @@ class CommandsSync:
         return all_p, best
     getRuntimeProviders.readonly = True
 
-    def dataStoreConnectorFindVar(self, command, params):
+    def dataStoreConnectorCmd(self, command, params):
         dsindex = params[0]
-        name = params[1]
-        datastore = command.remotedatastores[dsindex]
-        value, overridedata = datastore._findVar(name)
+        method = params[1]
+        args = params[2]
+        kwargs = params[3]
 
-        if value:
-            content = value.get('_content', None)
-            if isinstance(content, bb.data_smart.DataSmart):
-                # Value is a datastore (e.g. BB_ORIGENV) - need to handle this carefully
-                idx = command.remotedatastores.check_store(content, True)
-                return {'_content': DataStoreConnectionHandle(idx),
-                        '_connector_origtype': 'DataStoreConnectionHandle',
-                        '_connector_overrides': overridedata}
-            elif isinstance(content, set):
-                return {'_content': list(content),
-                        '_connector_origtype': 'set',
-                        '_connector_overrides': overridedata}
-            else:
-                value['_connector_overrides'] = overridedata
-        else:
-            value = {}
-            value['_connector_overrides'] = overridedata
-        return value
-    dataStoreConnectorFindVar.readonly = True
+        d = command.remotedatastores[dsindex]
+        ret = getattr(d, method)(*args, **kwargs)
 
-    def dataStoreConnectorGetKeys(self, command, params):
+        if isinstance(ret, bb.data_smart.DataSmart):
+            idx = command.remotedatastores.store(ret)
+            return DataStoreConnectionHandle(idx)
+
+        return ret
+
+    def dataStoreConnectorVarHistCmd(self, command, params):
         dsindex = params[0]
-        datastore = command.remotedatastores[dsindex]
-        return list(datastore.keys())
-    dataStoreConnectorGetKeys.readonly = True
+        method = params[1]
+        args = params[2]
+        kwargs = params[3]
 
-    def dataStoreConnectorGetVarHistory(self, command, params):
+        d = command.remotedatastores[dsindex].varhistory
+        return getattr(d, method)(*args, **kwargs)
+
+    def dataStoreConnectorVarHistCmdEmit(self, command, params):
         dsindex = params[0]
-        name = params[1]
-        datastore = command.remotedatastores[dsindex]
-        return datastore.varhistory.variable(name)
-    dataStoreConnectorGetVarHistory.readonly = True
+        var = params[1]
+        oval = params[2]
+        val = params[3]
+        d = command.remotedatastores[params[4]]
 
-    def dataStoreConnectorExpandPythonRef(self, command, params):
-        config_data_dict = params[0]
-        varname = params[1]
-        expr = params[2]
+        o = io.StringIO()
+        command.remotedatastores[dsindex].varhistory.emit(var, oval, val, o, d)
+        return o.getvalue()
 
-        config_data = command.remotedatastores.receive_datastore(config_data_dict)
+    def dataStoreConnectorIncHistCmd(self, command, params):
+        dsindex = params[0]
+        method = params[1]
+        args = params[2]
+        kwargs = params[3]
 
-        varparse = bb.data_smart.VariableParse(varname, config_data)
-        return varparse.python_sub(expr)
+        d = command.remotedatastores[dsindex].inchistory
+        return getattr(d, method)(*args, **kwargs)
 
     def dataStoreConnectorRelease(self, command, params):
         dsindex = params[0]
         if dsindex <= 0:
             raise CommandError('dataStoreConnectorRelease: invalid index %d' % dsindex)
         command.remotedatastores.release(dsindex)
-
-    def dataStoreConnectorSetVarFlag(self, command, params):
-        dsindex = params[0]
-        name = params[1]
-        flag = params[2]
-        value = params[3]
-        datastore = command.remotedatastores[dsindex]
-        datastore.setVarFlag(name, flag, value)
-
-    def dataStoreConnectorDelVar(self, command, params):
-        dsindex = params[0]
-        name = params[1]
-        datastore = command.remotedatastores[dsindex]
-        if len(params) > 2:
-            flag = params[2]
-            datastore.delVarFlag(name, flag)
-        else:
-            datastore.delVar(name)
-
-    def dataStoreConnectorRenameVar(self, command, params):
-        dsindex = params[0]
-        name = params[1]
-        newname = params[2]
-        datastore = command.remotedatastores[dsindex]
-        datastore.renameVar(name, newname)
 
     def parseRecipeFile(self, command, params):
         """
@@ -533,11 +546,11 @@ class CommandsSync:
         for the recipe.
         """
         fn = params[0]
+        mc = bb.runqueue.mc_from_tid(fn)
         appends = params[1]
         appendlist = params[2]
         if len(params) > 3:
-            config_data_dict = params[3]
-            config_data = command.remotedatastores.receive_datastore(config_data_dict)
+            config_data = command.remotedatastores[params[3]]
         else:
             config_data = None
 
@@ -545,7 +558,7 @@ class CommandsSync:
             if appendlist is not None:
                 appendfiles = appendlist
             else:
-                appendfiles = command.cooker.collection.get_file_appends(fn)
+                appendfiles = command.cooker.collections[mc].get_file_appends(fn)
         else:
             appendfiles = []
         # We are calling bb.cache locally here rather than on the server,
@@ -555,11 +568,10 @@ class CommandsSync:
         if config_data:
             # We have to use a different function here if we're passing in a datastore
             # NOTE: we took a copy above, so we don't do it here again
-            envdata = bb.cache.parse_recipe(config_data, fn, appendfiles)['']
+            envdata = command.cooker.databuilder._parse_recipe(config_data, fn, appendfiles, mc)['']
         else:
             # Use the standard path
-            parser = bb.cache.NoCache(command.cooker.databuilder)
-            envdata = parser.loadDataFull(fn, appendfiles)
+            envdata = command.cooker.databuilder.parseRecipe(fn, appendfiles)
         idx = command.remotedatastores.store(envdata)
         return DataStoreConnectionHandle(idx)
     parseRecipeFile.readonly = True
@@ -658,6 +670,16 @@ class CommandsAsync:
         command.finishAsyncCommand()
     findFilesMatchingInDir.needcache = False
 
+    def testCookerCommandEvent(self, command, params):
+        """
+        Dummy command used by OEQA selftest to test tinfoil without IO
+        """
+        pattern = params[0]
+
+        command.cooker.testCookerCommandEvent(pattern)
+        command.finishAsyncCommand()
+    testCookerCommandEvent.needcache = False
+
     def findConfigFilePath(self, command, params):
         """
         Find the path of the requested configuration file
@@ -722,7 +744,7 @@ class CommandsAsync:
         """
         event = params[0]
         bb.event.fire(eval(event), command.cooker.data)
-        command.currentAsyncCommand = None
+        process_server.clear_async_cmd()
     triggerEvent.needcache = False
 
     def resetCooker(self, command, params):
@@ -746,10 +768,10 @@ class CommandsAsync:
         """
         Find signature info files via the signature generator
         """
-        pn = params[0]
+        (mc, pn) = bb.runqueue.split_mc(params[0])
         taskname = params[1]
         sigs = params[2]
-        res = bb.siggen.find_siginfo(pn, taskname, sigs, command.cooker.data)
-        bb.event.fire(bb.event.FindSigInfoResult(res), command.cooker.data)
+        res = bb.siggen.find_siginfo(pn, taskname, sigs, command.cooker.databuilder.mcdata[mc])
+        bb.event.fire(bb.event.FindSigInfoResult(res), command.cooker.databuilder.mcdata[mc])
         command.finishAsyncCommand()
     findSigInfo.needcache = False

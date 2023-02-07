@@ -10,18 +10,17 @@ BitBake build tools.
 # SPDX-License-Identifier: GPL-2.0-only
 #
 
-import os, sys
-import warnings
-import pickle
-import logging
-import atexit
-import traceback
 import ast
+import atexit
+import collections
+import logging
+import pickle
+import sys
 import threading
+import traceback
 
-import bb.utils
-import bb.compat
 import bb.exceptions
+import bb.utils
 
 # This is the pid for which we should generate the event. This is set when
 # the runqueue forks off.
@@ -41,7 +40,7 @@ class HeartbeatEvent(Event):
     """Triggered at regular time intervals of 10 seconds. Other events can fire much more often
        (runQueueTaskStarted when there are many short tasks) or not at all for long periods
        of time (again runQueueTaskStarted, when there is just one long-running task), so this
-       event is more suitable for doing some task-independent work occassionally."""
+       event is more suitable for doing some task-independent work occasionally."""
     def __init__(self, time):
         Event.__init__(self)
         self.time = time
@@ -57,7 +56,7 @@ def set_class_handlers(h):
     _handlers = h
 
 def clean_class_handlers():
-    return bb.compat.OrderedDict()
+    return collections.OrderedDict()
 
 # Internal
 _handlers = clean_class_handlers()
@@ -69,29 +68,28 @@ _catchall_handlers = {}
 _eventfilter = None
 _uiready = False
 _thread_lock = threading.Lock()
-_thread_lock_enabled = False
-
-if hasattr(__builtins__, '__setitem__'):
-    builtins = __builtins__
-else:
-    builtins = __builtins__.__dict__
+_heartbeat_enabled = False
 
 def enable_threadlock():
-    global _thread_lock_enabled
-    _thread_lock_enabled = True
+    # Always needed now
+    return
 
 def disable_threadlock():
-    global _thread_lock_enabled
-    _thread_lock_enabled = False
+    # Always needed now
+    return
+
+def enable_heartbeat():
+    global _heartbeat_enabled
+    _heartbeat_enabled = True
+
+def disable_heartbeat():
+    global _heartbeat_enabled
+    _heartbeat_enabled = False
 
 def execute_handler(name, handler, event, d):
     event.data = d
-    addedd = False
-    if 'd' not in builtins:
-        builtins['d'] = d
-        addedd = True
     try:
-        ret = handler(event)
+        ret = handler(event, d)
     except (bb.parse.SkipRecipe, bb.BBHandledException):
         raise
     except Exception:
@@ -105,8 +103,7 @@ def execute_handler(name, handler, event, d):
         raise
     finally:
         del event.data
-        if addedd:
-            del builtins['d']
+
 
 def fire_class_handlers(event, d):
     if isinstance(event, logging.LogRecord):
@@ -119,6 +116,8 @@ def fire_class_handlers(event, d):
             if _eventfilter:
                 if not _eventfilter(name, handler, event, d):
                     continue
+            if d is not None and not name in (d.getVar("__BBHANDLERS_MC") or set()):
+                continue
             execute_handler(name, handler, event, d)
 
 ui_queue = []
@@ -131,8 +130,14 @@ def print_ui_queue():
     if not _uiready:
         from bb.msg import BBLogFormatter
         # Flush any existing buffered content
-        sys.stdout.flush()
-        sys.stderr.flush()
+        try:
+            sys.stdout.flush()
+        except:
+            pass
+        try:
+            sys.stderr.flush()
+        except:
+            pass
         stdout = logging.StreamHandler(sys.stdout)
         stderr = logging.StreamHandler(sys.stderr)
         formatter = BBLogFormatter("%(levelname)s: %(message)s")
@@ -173,36 +178,30 @@ def print_ui_queue():
 
 def fire_ui_handlers(event, d):
     global _thread_lock
-    global _thread_lock_enabled
 
     if not _uiready:
         # No UI handlers registered yet, queue up the messages
         ui_queue.append(event)
         return
 
-    if _thread_lock_enabled:
-        _thread_lock.acquire()
-
-    errors = []
-    for h in _ui_handlers:
-        #print "Sending event %s" % event
-        try:
-             if not _ui_logfilters[h].filter(event):
-                 continue
-             # We use pickle here since it better handles object instances
-             # which xmlrpc's marshaller does not. Events *must* be serializable
-             # by pickle.
-             if hasattr(_ui_handlers[h].event, "sendpickle"):
-                _ui_handlers[h].event.sendpickle((pickle.dumps(event)))
-             else:
-                _ui_handlers[h].event.send(event)
-        except:
-            errors.append(h)
-    for h in errors:
-        del _ui_handlers[h]
-
-    if _thread_lock_enabled:
-        _thread_lock.release()
+    with bb.utils.lock_timeout(_thread_lock):
+        errors = []
+        for h in _ui_handlers:
+            #print "Sending event %s" % event
+            try:
+                 if not _ui_logfilters[h].filter(event):
+                     continue
+                 # We use pickle here since it better handles object instances
+                 # which xmlrpc's marshaller does not. Events *must* be serializable
+                 # by pickle.
+                 if hasattr(_ui_handlers[h].event, "sendpickle"):
+                    _ui_handlers[h].event.sendpickle((pickle.dumps(event)))
+                 else:
+                    _ui_handlers[h].event.send(event)
+            except:
+                errors.append(h)
+        for h in errors:
+            del _ui_handlers[h]
 
 def fire(event, d):
     """Fire off an Event"""
@@ -228,22 +227,30 @@ def fire_from_worker(event, d):
     fire_ui_handlers(event, d)
 
 noop = lambda _: None
-def register(name, handler, mask=None, filename=None, lineno=None):
+def register(name, handler, mask=None, filename=None, lineno=None, data=None):
     """Register an Event handler"""
+
+    if data is not None and data.getVar("BB_CURRENT_MC"):
+        mc = data.getVar("BB_CURRENT_MC")
+        name = '%s%s' % (mc.replace('-', '_'), name)
 
     # already registered
     if name in _handlers:
+        if data is not None:
+            bbhands_mc = (data.getVar("__BBHANDLERS_MC") or set())
+            bbhands_mc.add(name)
+            data.setVar("__BBHANDLERS_MC", bbhands_mc)
         return AlreadyRegistered
 
     if handler is not None:
         # handle string containing python code
         if isinstance(handler, str):
-            tmp = "def %s(e):\n%s" % (name, handler)
+            tmp = "def %s(e, d):\n%s" % (name, handler)
             try:
                 code = bb.methodpool.compile_cache(tmp)
                 if not code:
                     if filename is None:
-                        filename = "%s(e)" % name
+                        filename = "%s(e, d)" % name
                     code = compile(tmp, filename, "exec", ast.PyCF_ONLY_AST)
                     if lineno is not None:
                         ast.increment_lineno(code, lineno-1)
@@ -269,16 +276,32 @@ def register(name, handler, mask=None, filename=None, lineno=None):
                     _event_handler_map[m] = {}
                 _event_handler_map[m][name] = True
 
+        if data is not None:
+            bbhands_mc = (data.getVar("__BBHANDLERS_MC") or set())
+            bbhands_mc.add(name)
+            data.setVar("__BBHANDLERS_MC", bbhands_mc)
+
         return Registered
 
-def remove(name, handler):
+def remove(name, handler, data=None):
     """Remove an Event handler"""
+    if data is not None:
+        if data.getVar("BB_CURRENT_MC"):
+            mc = data.getVar("BB_CURRENT_MC")
+            name = '%s%s' % (mc.replace('-', '_'), name)
+
     _handlers.pop(name)
     if name in _catchall_handlers:
         _catchall_handlers.pop(name)
     for event in _event_handler_map.keys():
         if name in _event_handler_map[event]:
             _event_handler_map[event].pop(name)
+
+    if data is not None:
+        bbhands_mc = (data.getVar("__BBHANDLERS_MC") or set())
+        if name in bbhands_mc:
+            bbhands_mc.remove(name)
+            data.setVar("__BBHANDLERS_MC", bbhands_mc)
 
 def get_handlers():
     return _handlers
@@ -292,21 +315,23 @@ def set_eventfilter(func):
     _eventfilter = func
 
 def register_UIHhandler(handler, mainui=False):
-    bb.event._ui_handler_seq = bb.event._ui_handler_seq + 1
-    _ui_handlers[_ui_handler_seq] = handler
-    level, debug_domains = bb.msg.constructLogOptions()
-    _ui_logfilters[_ui_handler_seq] = UIEventFilter(level, debug_domains)
-    if mainui:
-        global _uiready
-        _uiready = _ui_handler_seq
-    return _ui_handler_seq
+    with bb.utils.lock_timeout(_thread_lock):
+        bb.event._ui_handler_seq = bb.event._ui_handler_seq + 1
+        _ui_handlers[_ui_handler_seq] = handler
+        level, debug_domains = bb.msg.constructLogOptions()
+        _ui_logfilters[_ui_handler_seq] = UIEventFilter(level, debug_domains)
+        if mainui:
+            global _uiready
+            _uiready = _ui_handler_seq
+        return _ui_handler_seq
 
 def unregister_UIHhandler(handlerNum, mainui=False):
     if mainui:
         global _uiready
         _uiready = False
-    if handlerNum in _ui_handlers:
-        del _ui_handlers[handlerNum]
+    with bb.utils.lock_timeout(_thread_lock):
+        if handlerNum in _ui_handlers:
+            del _ui_handlers[handlerNum]
     return
 
 def get_uihandler():
@@ -347,7 +372,7 @@ def set_UIHmask(handlerNum, level, debug_domains, mask):
 
 def getName(e):
     """Returns the name of a class or class instance"""
-    if getattr(e, "__name__", None) == None:
+    if getattr(e, "__name__", None) is None:
         return e.__class__.__name__
     else:
         return e.__name__
@@ -389,6 +414,10 @@ class RecipeEvent(Event):
 
 class RecipePreFinalise(RecipeEvent):
     """ Recipe Parsing Complete but not yet finalised"""
+
+class RecipePostKeyExpansion(RecipeEvent):
+    """ Recipe Parsing Complete but not yet finalised"""
+
 
 class RecipeTaskPreProcess(RecipeEvent):
     """
@@ -457,7 +486,7 @@ class BuildCompleted(BuildBase, OperationCompleted):
         BuildBase.__init__(self, n, p, failures)
 
 class DiskFull(Event):
-    """Disk full case build aborted"""
+    """Disk full case build halted"""
     def __init__(self, dev, type, freespace, mountpoint):
         Event.__init__(self)
         self._dev = dev
@@ -509,7 +538,7 @@ class NoProvider(Event):
         extra = ''
         if not self._reasons:
             if self._close_matches:
-                extra = ". Close matches:\n  %s" % '\n  '.join(self._close_matches)
+                extra = ". Close matches:\n  %s" % '\n  '.join(sorted(set(self._close_matches)))
 
         if self._dependees:
             msg = "Nothing %sPROVIDES '%s' (but %s %sDEPENDS on or otherwise requires it)%s" % (r, self._item, ", ".join(self._dependees), r, extra)
@@ -641,6 +670,17 @@ class ReachableStamps(Event):
         Event.__init__(self)
         self.stamps = stamps
 
+class StaleSetSceneTasks(Event):
+    """
+    An event listing setscene tasks which are 'stale' and will
+    be rerun. The metadata may use to clean up stale data.
+    tasks is a mapping of tasks and matching stale stamps.
+    """
+
+    def __init__(self, tasks):
+        Event.__init__(self)
+        self.tasks = tasks
+
 class FilesMatchingFound(Event):
     """
     Event when a list of files matching the supplied pattern has
@@ -724,7 +764,7 @@ class LogHandler(logging.Handler):
 class MetadataEvent(Event):
     """
     Generic event that target for OE-Core classes
-    to report information during asynchrous execution
+    to report information during asynchronous execution
     """
     def __init__(self, eventtype, eventdata):
         Event.__init__(self)

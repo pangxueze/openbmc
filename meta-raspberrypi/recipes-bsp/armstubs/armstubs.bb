@@ -11,6 +11,10 @@ COMPATIBLE_MACHINE = "^rpi$"
 
 S = "${RPITOOLS_S}/armstubs"
 
+export CC7="${CC}"
+export LD7="${LD}"
+export OBJCOPY7="${OBJCOPY}"
+export OBJDUMP7="${OBJDUMP}"
 export CC8="${CC}"
 export LD8="${LD}"
 export OBJCOPY8="${OBJCOPY}"
@@ -30,3 +34,5 @@ addtask deploy before do_build after do_install
 do_deploy[dirs] += "${DEPLOYDIR}/${PN}"
 
 PACKAGE_ARCH = "${MACHINE_ARCH}"
+
+TOOLCHAIN = "gcc"

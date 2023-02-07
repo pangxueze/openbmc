@@ -12,10 +12,14 @@ SRC_URI = " \
 
 S = "${WORKDIR}"
 
+inherit features_check
+
+REQUIRED_DISTRO_FEATURES = "smack"
+
 do_install() {
     install -d ${D}${sbindir}
     install -m 0755 notroot.py ${D}${sbindir}
     install -m 0755 *.sh ${D}${sbindir}
 }
 
-RDEPENDS_${PN} = "smack python mmap-smack-test tcp-smack-test udp-smack-test"
+RDEPENDS:${PN} = "smack python3-core mmap-smack-test tcp-smack-test udp-smack-test"

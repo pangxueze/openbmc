@@ -1,3 +1,9 @@
+#
+# Copyright OpenEmbedded Contributors
+#
+# SPDX-License-Identifier: MIT
+#
+
 # Development tool - source extraction helper class
 #
 # NOTE: this class is intended for use by devtool and should not be
@@ -199,6 +205,7 @@ python devtool_post_patch() {
             # Run do_patch function with the override applied
             localdata = bb.data.createCopy(d)
             localdata.setVar('OVERRIDES', ':'.join(no_overrides))
+            localdata.setVar('FILESOVERRIDES', ':'.join(no_overrides))
             bb.build.exec_func('do_patch', localdata)
             rm_patches()
             # Now we need to reconcile the dev branch with the no-overrides one
@@ -216,7 +223,8 @@ python devtool_post_patch() {
                 # Reset back to the initial commit on a new branch
                 bb.process.run('git checkout %s -b devtool-override-%s' % (initial_rev, override), cwd=srcsubdir)
                 # Run do_patch function with the override applied
-                localdata.appendVar('OVERRIDES', ':%s' % override)
+                localdata.setVar('OVERRIDES', ':'.join(no_overrides + [override]))
+                localdata.setVar('FILESOVERRIDES', ':'.join(no_overrides + [override]))
                 bb.build.exec_func('do_patch', localdata)
                 rm_patches()
                 # Now we need to reconcile the new branch with the no-overrides one

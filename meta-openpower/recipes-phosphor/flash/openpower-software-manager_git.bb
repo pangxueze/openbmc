@@ -8,45 +8,69 @@ PV = "1.0+git${SRCPV}"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://${S}/LICENSE;md5=e3fc50a88d0a364313df4b21ef20c29e"
 
-inherit autotools pkgconfig systemd
+inherit meson pkgconfig systemd
 inherit obmc-phosphor-dbus-service
-inherit pythonnative
 
+# Static configuration. This is the default if no other layout is specified.
+inherit ${@bb.utils.contains_any('DISTRO_FEATURES', \
+        'openpower-ubi-fs phosphor-mmc', \
+        '', \
+        'openpower-software-manager-static', d)}
+
+# UBI layout
 inherit ${@bb.utils.contains('DISTRO_FEATURES', 'openpower-ubi-fs', \
                              'openpower-software-manager-ubi', \
-                             'openpower-software-manager-static', d)}
+                             '', d)}
+# eMMC layout
+inherit ${@bb.utils.contains('DISTRO_FEATURES', 'phosphor-mmc', \
+                             'openpower-software-manager-mmc', \
+                             '', d)}
+
+# Virtual PNOR
 inherit ${@bb.utils.contains('DISTRO_FEATURES', 'openpower-virtual-pnor', \
                              'openpower-software-manager-virtual-pnor', \
                              '', d)}
 
-PACKAGECONFIG[verify_pnor_signature] = "--enable-verify_pnor_signature,--disable-verify_pnor_signature"
-PACKAGECONFIG[ubifs_layout] = "--enable-ubifs_layout,--disable-ubifs_layout,,mtd-utils-ubifs"
-PACKAGECONFIG[virtual_pnor] = "--enable-virtual_pnor,--disable-virtual_pnor"
+# PLDM Support
+inherit ${@bb.utils.contains('DISTRO_FEATURES', 'openpower-hostfw-over-pldm', \
+                             'openpower-software-manager-pldm', \
+                             '', d)}
 
-EXTRA_OECONF += " \
-    PNOR_MSL="v2.0.10 v2.2" \
+PACKAGECONFIG[verify_pnor_signature] = "-Dverify-signature=enabled, -Dverify-signature=disabled"
+PACKAGECONFIG[ubifs_layout] = "-Ddevice-type=ubi,,,mtd-utils-ubifs"
+PACKAGECONFIG[mmc_layout] = "-Ddevice-type=mmc"
+PACKAGECONFIG[virtual_pnor] = "-Dvpnor=enabled, -Dvpnor=disabled,,bash"
+PACKAGECONFIG[pldm] = "-Dpldm=enabled, -Dpldm=disabled"
+
+EXTRA_OEMESON += " \
+    -Dtests=disabled \
+    -Dmsl="v2.0.10 v2.2" \
     "
 
 DEPENDS += " \
-        autoconf-archive-native \
+        cli11 \
+        dbus \
+        nlohmann-json \
+        openssl \
         phosphor-dbus-interfaces \
         phosphor-logging \
         sdbusplus \
-        sdbusplus-native \
         "
 
-RDEPENDS_${PN} += " \
+RDEPENDS:${PN} += " \
         virtual-obmc-image-manager \
         "
 
+FILES:${PN} += "${datadir}/dbus-1/system.d/org.open_power.Software.Host.Updater.conf"
+
 S = "${WORKDIR}/git"
 
-SRC_URI += "git://github.com/openbmc/openpower-pnor-code-mgmt"
+SRC_URI += "git://github.com/openbmc/openpower-pnor-code-mgmt;branch=master;protocol=https"
 
-SRCREV = "59d5657643c1cd24de579867abff1dcfa54d3803"
+SRCREV = "6fa12d3db9221ca8ccc79cbd7c3948e68f927f2b"
 
-DBUS_SERVICE_${PN} += "org.open_power.Software.Host.Updater.service"
+DBUS_SERVICE:${PN} += "org.open_power.Software.Host.Updater.service"
 
-SYSTEMD_SERVICE_${PN} += " \
+SYSTEMD_SERVICE:${PN} += " \
         op-pnor-msl.service \
         "

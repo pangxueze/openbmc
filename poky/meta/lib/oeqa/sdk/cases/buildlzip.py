@@ -1,4 +1,6 @@
 #
+# Copyright OpenEmbedded Contributors
+#
 # SPDX-License-Identifier: MIT
 #
 
@@ -20,7 +22,7 @@ class BuildLzipTest(OESDKTestCase):
             dirs["build"] = os.path.join(testdir, "build")
             dirs["install"] = os.path.join(testdir, "install")
 
-            subprocess.check_output(["tar", "xf", tarball, "-C", testdir])
+            subprocess.check_output(["tar", "xf", tarball, "-C", testdir], stderr=subprocess.STDOUT)
             self.assertTrue(os.path.isdir(dirs["source"]))
             os.makedirs(dirs["build"])
 

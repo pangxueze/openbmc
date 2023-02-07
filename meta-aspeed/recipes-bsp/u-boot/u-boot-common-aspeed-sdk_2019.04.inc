@@ -1,24 +1,26 @@
+require conf/machine/distro/include/uboot-distrovars.inc
+
 HOMEPAGE = "https://github.com/AspeedTech-BMC/u-boot"
 SECTION = "bootloaders"
-DEPENDS += "flex-native bison-native"
+DEPENDS += "flex-native bison-native xxd-native"
 
-LICENSE = "GPLv2+"
+LICENSE = "GPL-2.0-or-later"
 LIC_FILES_CHKSUM = "file://Licenses/README;md5=30503fd321432fc713238f582193b78e"
 PE = "1"
 
 # We use the revision in order to avoid having to fetch it from the
 # repo during parse
-SRCREV = "4d29b04c7aca4121d542b759575fbb93e52aef47"
+SRCREV = "29b2d11d822ee7f9822270c710e1d45cade3ed46"
+SRC_URI = "git://git@github.com/openbmc/u-boot.git;nobranch=1;protocol=https"
 
-UBRANCH = "aspeed-dev-v2019.04"
-SRC_URI = "git://github.com/AspeedTech-BMC/u-boot;branch=${UBRANCH};protocol=https"
-SRC_URI += "file://0001-arm-evb-ast2600-put-environment-back-at-512KiB.patch"
-
-# There are different BOOTCOMMANDS for differently sized raw flash modules.
-ASPEED_IMAGE_SIZE_KB ?= "32768"
-MACHINEOVERRIDES .= ":flash-${ASPEED_IMAGE_SIZE_KB}"
-SRC_URI_append_flash-131072 = " file://bootcmd.cfg"
+SRC_URI:append:uboot-flash-32768 = " file://u-boot_flash_32M.cfg"
+SRC_URI:append:uboot-flash-65536 = " file://u-boot_flash_64M.cfg"
 
 S = "${WORKDIR}/git"
+B = "${WORKDIR}/build"
+do_configure[cleandirs] = "${B}"
+
+# We don't have 'u-boot-initial-env' target in our u-boot version
+UBOOT_INITIAL_ENV=""
 
 PV = "v2019.04+git${SRCPV}"

@@ -1,5 +1,5 @@
 HOMEPAGE = "https://github.com/openbmc/ipmi-fru-parser"
-LICENSE = "GPL-3.0"
+LICENSE = "GPL-3.0-or-later"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=7702f203b58979ebbc31bfaeb44f219c"
-SRC_URI += "git://github.com/openbmc/ipmi-fru-parser"
-SRCREV = "2cdb0e3fb478bc19eddcf3f919bef10188634d49"
+SRC_URI += "git://github.com/openbmc/ipmi-fru-parser;branch=master;protocol=https"
+SRCREV = "06514028f879509bbc0a545011c3d50f045fb2cb"

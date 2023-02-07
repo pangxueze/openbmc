@@ -5,14 +5,16 @@ e.g., dleyna-server. In brief, it provides APIs for logging, error, settings \
 and task management and an IPC asbstraction API."
 HOMEPAGE = "https://01.org/dleyna/"
 
-LICENSE = "LGPLv2.1+"
+LICENSE = "LGPL-2.1-or-later"
 LIC_FILES_CHKSUM = "file://COPYING;md5=4fbd65380cdd255951079008b364516c \
-                    file://libdleyna/core/core.c;endline=21;md5=139cba0c634344abc9456694fbb5083b"
+                    file://libdleyna/core/core.c;endline=21;md5=68602998351825b0844aae34c684c54e"
 
 DEPENDS = "glib-2.0 gupnp"
 
-SRC_URI = "git://github.com/01org/${BPN}.git"
-SRCREV = "27a3786ec013f64fd58243410a60798f824acec3"
+PV .= "+git${SRCPV}"
+
+SRC_URI = "git://github.com/01org/${BPN}.git;branch=master;protocol=https"
+SRCREV = "1c6853f5bc697dc0a8774fd70dbc915c4dbe7c5b"
 S = "${WORKDIR}/git"
 
 inherit autotools pkgconfig

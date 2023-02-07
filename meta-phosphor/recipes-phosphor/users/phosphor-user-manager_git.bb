@@ -1,40 +1,45 @@
 SUMMARY = "Phosphor User Manager Daemon"
 DESCRIPTION = "Daemon that does user management"
 HOMEPAGE = "http://github.com/openbmc/phosphor-user-manager"
-PR = "r1"
-PV = "1.0+git${SRCPV}"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=e3fc50a88d0a364313df4b21ef20c29e"
-
-inherit autotools pkgconfig
-inherit obmc-phosphor-dbus-service
-
-DEPENDS += "autoconf-archive-native"
 DEPENDS += "sdbusplus"
 DEPENDS += "phosphor-logging"
 DEPENDS += "phosphor-dbus-interfaces"
 DEPENDS += "boost"
 DEPENDS += "nss-pam-ldapd"
 DEPENDS += "systemd"
-PACKAGE_BEFORE_PN = "phosphor-ldap"
+SRCREV = "5686206103721b8cc452179b4947ad67e3571bcf"
+PV = "1.0+git${SRCPV}"
+PR = "r1"
 
+SRC_URI += "git://github.com/openbmc/phosphor-user-manager;branch=master;protocol=https"
+
+S = "${WORKDIR}/git"
+
+inherit meson pkgconfig
+inherit obmc-phosphor-dbus-service
 inherit useradd
 
+EXTRA_OEMESON = "-Dtests=disabled"
+
+FILES:phosphor-ldap += " \
+        ${bindir}/phosphor-ldap-conf \
+"
+FILES:${PN} += " \
+        ${systemd_unitdir} \
+        ${datadir}/dbus-1 \
+        ${datadir}/phosphor-certificate-manager \
+"
+
 USERADD_PACKAGES = "${PN} phosphor-ldap"
+
+PACKAGE_BEFORE_PN = "phosphor-ldap"
 DBUS_PACKAGES = "${USERADD_PACKAGES}"
 # add groups needed for privilege maintenance
-GROUPADD_PARAM_${PN} = "priv-admin; priv-operator; priv-user "
-GROUPADD_PARAM_phosphor-ldap = "priv-admin; priv-operator; priv-user "
-
-DBUS_SERVICE_${PN} += "xyz.openbmc_project.User.Manager.service"
-FILES_phosphor-ldap += " \
-        ${bindir}/phosphor-ldap-conf \
-        ${bindir}/phosphor-ldap-mapper \
-"
-DBUS_SERVICE_phosphor-ldap = " \
+GROUPADD_PARAM:${PN} = "priv-admin; priv-operator; priv-user "
+GROUPADD_PARAM:phosphor-ldap = "priv-admin; priv-operator; priv-user "
+DBUS_SERVICE:${PN} += "xyz.openbmc_project.User.Manager.service"
+DBUS_SERVICE:phosphor-ldap = " \
         xyz.openbmc_project.Ldap.Config.service \
-        xyz.openbmc_project.LDAP.PrivilegeMapper.service \
 "
-SRC_URI += "git://github.com/openbmc/phosphor-user-manager"
-SRCREV = "d4d655006c6179d47008d9b374debcedcc03a1c4"
-S = "${WORKDIR}/git"

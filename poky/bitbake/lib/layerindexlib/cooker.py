@@ -4,9 +4,9 @@
 #
 
 import logging
-import json
+import os
 
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 
 from urllib.parse import unquote, urlparse
 
@@ -74,7 +74,7 @@ class CookerPlugin(layerindexlib.plugin.IndexPlugin):
         d = self.layerindex.data
 
         if not branches:
-            raise LayerIndexFetchError("No branches specified for _load_bblayers!")
+            raise layerindexlib.LayerIndexFetchError("No branches specified for _load_bblayers!")
 
         index = layerindexlib.LayerIndexObj()
 
@@ -94,7 +94,7 @@ class CookerPlugin(layerindexlib.plugin.IndexPlugin):
             return index
 
         collections = d.getVar('BBFILE_COLLECTIONS')
-        layerconfs = d.varhistory.get_variable_items_files('BBFILE_COLLECTIONS', d)
+        layerconfs = d.varhistory.get_variable_items_files('BBFILE_COLLECTIONS')
         bbfile_collections = {layer: os.path.dirname(os.path.dirname(path)) for layer, path in layerconfs.items()}
 
         (_, bb_branch, _, _) = self._get_bitbake_info()
@@ -173,7 +173,7 @@ class CookerPlugin(layerindexlib.plugin.IndexPlugin):
         else:
             branches = ['HEAD']
 
-        logger.debug(1, "Loading cooker data branches %s" % branches)
+        logger.debug("Loading cooker data branches %s" % branches)
 
         index = self._load_bblayers(branches=branches)
 
@@ -203,7 +203,7 @@ class CookerPlugin(layerindexlib.plugin.IndexPlugin):
                     try:
                         depDict = bb.utils.explode_dep_versions2(deps)
                     except bb.utils.VersionStringException as vse:
-                        bb.fatal('Error parsing LAYERDEPENDS_%s: %s' % (c, str(vse)))
+                        bb.fatal('Error parsing LAYERDEPENDS_%s: %s' % (collection, str(vse)))
 
                     for dep, oplist in list(depDict.items()):
                         # We need to search ourselves, so use the _ version...
@@ -220,7 +220,7 @@ class CookerPlugin(layerindexlib.plugin.IndexPlugin):
                                         required=required, layerbranch=layerBranchId,
                                         dependency=depLayerBranch.layer_id)
 
-                        logger.debug(1, '%s requires %s' % (layerDependency.layer.name, layerDependency.dependency.name))
+                        logger.debug('%s requires %s' % (layerDependency.layer.name, layerDependency.dependency.name))
                         index.add_element("layerDependencies", [layerDependency])
 
                     return layerDependencyId
@@ -269,7 +269,7 @@ class CookerPlugin(layerindexlib.plugin.IndexPlugin):
 
                     layer = bb.utils.get_file_layer(realfn[0], self.config_data)
 
-                    depBranchId = collection_layerbranch[layer]
+                    depBranchId = collection[layer]
 
                     recipeId += 1
                     recipe = layerindexlib.Recipe(index, None)
@@ -279,7 +279,7 @@ class CookerPlugin(layerindexlib.plugin.IndexPlugin):
                                    summary=pn, description=pn, section='?',
                                    license='?', homepage='?', bugtracker='?',
                                    provides='?', bbclassextend='?', inherits='?',
-                                   blacklisted='?', layerbranch=depBranchId)
+                                   disallowed='?', layerbranch=depBranchId)
 
                     index = addElement("recipes", [recipe], index)
 

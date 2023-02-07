@@ -10,9 +10,11 @@
 import logging
 import os
 import sys
+import time
 import atexit
 import re
 from collections import OrderedDict, defaultdict
+from functools import partial
 
 import bb.cache
 import bb.cooker
@@ -21,8 +23,7 @@ import bb.taskdata
 import bb.utils
 import bb.command
 import bb.remotedata
-from bb.cookerdata import CookerConfiguration, ConfigParameters
-from bb.main import setup_bitbake, BitBakeConfigParameters, BBMainException
+from bb.main import setup_bitbake, BitBakeConfigParameters
 import bb.fetch2
 
 
@@ -44,66 +45,73 @@ class TinfoilUIException(Exception):
 class TinfoilCommandFailed(Exception):
     """Exception raised when run_command fails"""
 
+class TinfoilDataStoreConnectorVarHistory:
+    def __init__(self, tinfoil, dsindex):
+        self.tinfoil = tinfoil
+        self.dsindex = dsindex
+
+    def remoteCommand(self, cmd, *args, **kwargs):
+        return self.tinfoil.run_command('dataStoreConnectorVarHistCmd', self.dsindex, cmd, args, kwargs)
+
+    def emit(self, var, oval, val, o, d):
+        ret = self.tinfoil.run_command('dataStoreConnectorVarHistCmdEmit', self.dsindex, var, oval, val, d.dsindex)
+        o.write(ret)
+
+    def __getattr__(self, name):
+        if not hasattr(bb.data_smart.VariableHistory, name):
+            raise AttributeError("VariableHistory has no such method %s" % name)
+
+        newfunc = partial(self.remoteCommand, name)
+        setattr(self, name, newfunc)
+        return newfunc
+
+class TinfoilDataStoreConnectorIncHistory:
+    def __init__(self, tinfoil, dsindex):
+        self.tinfoil = tinfoil
+        self.dsindex = dsindex
+
+    def remoteCommand(self, cmd, *args, **kwargs):
+        return self.tinfoil.run_command('dataStoreConnectorIncHistCmd', self.dsindex, cmd, args, kwargs)
+
+    def __getattr__(self, name):
+        if not hasattr(bb.data_smart.IncludeHistory, name):
+            raise AttributeError("IncludeHistory has no such method %s" % name)
+
+        newfunc = partial(self.remoteCommand, name)
+        setattr(self, name, newfunc)
+        return newfunc
+
 class TinfoilDataStoreConnector:
-    """Connector object used to enable access to datastore objects via tinfoil"""
+    """
+    Connector object used to enable access to datastore objects via tinfoil
+    Method calls are transmitted to the remote datastore for processing, if a datastore is
+    returned we return a connector object for the new store
+    """
 
     def __init__(self, tinfoil, dsindex):
         self.tinfoil = tinfoil
         self.dsindex = dsindex
-    def getVar(self, name):
-        value = self.tinfoil.run_command('dataStoreConnectorFindVar', self.dsindex, name)
-        overrides = None
-        if isinstance(value, dict):
-            if '_connector_origtype' in value:
-                value['_content'] = self.tinfoil._reconvert_type(value['_content'], value['_connector_origtype'])
-                del value['_connector_origtype']
-            if '_connector_overrides' in value:
-                overrides = value['_connector_overrides']
-                del value['_connector_overrides']
-        return value, overrides
-    def getKeys(self):
-        return set(self.tinfoil.run_command('dataStoreConnectorGetKeys', self.dsindex))
-    def getVarHistory(self, name):
-        return self.tinfoil.run_command('dataStoreConnectorGetVarHistory', self.dsindex, name)
-    def expandPythonRef(self, varname, expr, d):
-        ds = bb.remotedata.RemoteDatastores.transmit_datastore(d)
-        ret = self.tinfoil.run_command('dataStoreConnectorExpandPythonRef', ds, varname, expr)
+        self.varhistory = TinfoilDataStoreConnectorVarHistory(tinfoil, dsindex)
+        self.inchistory = TinfoilDataStoreConnectorIncHistory(tinfoil, dsindex)
+
+    def remoteCommand(self, cmd, *args, **kwargs):
+        ret = self.tinfoil.run_command('dataStoreConnectorCmd', self.dsindex, cmd, args, kwargs)
+        if isinstance(ret, bb.command.DataStoreConnectionHandle):
+            return TinfoilDataStoreConnector(self.tinfoil, ret.dsindex)
         return ret
-    def setVar(self, varname, value):
-        if self.dsindex is None:
-            self.tinfoil.run_command('setVariable', varname, value)
-        else:
-            # Not currently implemented - indicate that setting should
-            # be redirected to local side
-            return True
-    def setVarFlag(self, varname, flagname, value):
-        if self.dsindex is None:
-            self.tinfoil.run_command('dataStoreConnectorSetVarFlag', self.dsindex, varname, flagname, value)
-        else:
-            # Not currently implemented - indicate that setting should
-            # be redirected to local side
-            return True
-    def delVar(self, varname):
-        if self.dsindex is None:
-            self.tinfoil.run_command('dataStoreConnectorDelVar', self.dsindex, varname)
-        else:
-            # Not currently implemented - indicate that setting should
-            # be redirected to local side
-            return True
-    def delVarFlag(self, varname, flagname):
-        if self.dsindex is None:
-            self.tinfoil.run_command('dataStoreConnectorDelVar', self.dsindex, varname, flagname)
-        else:
-            # Not currently implemented - indicate that setting should
-            # be redirected to local side
-            return True
-    def renameVar(self, name, newname):
-        if self.dsindex is None:
-            self.tinfoil.run_command('dataStoreConnectorRenameVar', self.dsindex, name, newname)
-        else:
-            # Not currently implemented - indicate that setting should
-            # be redirected to local side
-            return True
+
+    def __getattr__(self, name):
+        if not hasattr(bb.data._dict_type, name):
+            raise AttributeError("Data store has no such method %s" % name)
+
+        newfunc = partial(self.remoteCommand, name)
+        setattr(self, name, newfunc)
+        return newfunc
+
+    def __iter__(self):
+        keys = self.tinfoil.run_command('dataStoreConnectorCmd', self.dsindex, "keys", [], {})
+        for k in keys:
+            yield k
 
 class TinfoilCookerAdapter:
     """
@@ -113,26 +121,28 @@ class TinfoilCookerAdapter:
 
     class TinfoilCookerCollectionAdapter:
         """ cooker.collection adapter """
-        def __init__(self, tinfoil):
+        def __init__(self, tinfoil, mc=''):
             self.tinfoil = tinfoil
+            self.mc = mc
         def get_file_appends(self, fn):
-            return self.tinfoil.get_file_appends(fn)
+            return self.tinfoil.get_file_appends(fn, self.mc)
         def __getattr__(self, name):
             if name == 'overlayed':
-                return self.tinfoil.get_overlayed_recipes()
+                return self.tinfoil.get_overlayed_recipes(self.mc)
             elif name == 'bbappends':
-                return self.tinfoil.run_command('getAllAppends')
+                return self.tinfoil.run_command('getAllAppends', self.mc)
             else:
                 raise AttributeError("%s instance has no attribute '%s'" % (self.__class__.__name__, name))
 
     class TinfoilRecipeCacheAdapter:
         """ cooker.recipecache adapter """
-        def __init__(self, tinfoil):
+        def __init__(self, tinfoil, mc=''):
             self.tinfoil = tinfoil
+            self.mc = mc
             self._cache = {}
 
         def get_pkg_pn_fn(self):
-            pkg_pn = defaultdict(list, self.tinfoil.run_command('getRecipes') or [])
+            pkg_pn = defaultdict(list, self.tinfoil.run_command('getRecipes', self.mc) or [])
             pkg_fn = {}
             for pn, fnlist in pkg_pn.items():
                 for fn in fnlist:
@@ -151,27 +161,27 @@ class TinfoilCookerAdapter:
                 self.get_pkg_pn_fn()
                 return self._cache[name]
             elif name == 'deps':
-                attrvalue = defaultdict(list, self.tinfoil.run_command('getRecipeDepends') or [])
+                attrvalue = defaultdict(list, self.tinfoil.run_command('getRecipeDepends', self.mc) or [])
             elif name == 'rundeps':
-                attrvalue = defaultdict(lambda: defaultdict(list), self.tinfoil.run_command('getRuntimeDepends') or [])
+                attrvalue = defaultdict(lambda: defaultdict(list), self.tinfoil.run_command('getRuntimeDepends', self.mc) or [])
             elif name == 'runrecs':
-                attrvalue = defaultdict(lambda: defaultdict(list), self.tinfoil.run_command('getRuntimeRecommends') or [])
+                attrvalue = defaultdict(lambda: defaultdict(list), self.tinfoil.run_command('getRuntimeRecommends', self.mc) or [])
             elif name == 'pkg_pepvpr':
-                attrvalue = self.tinfoil.run_command('getRecipeVersions') or {}
+                attrvalue = self.tinfoil.run_command('getRecipeVersions', self.mc) or {}
             elif name == 'inherits':
-                attrvalue = self.tinfoil.run_command('getRecipeInherits') or {}
+                attrvalue = self.tinfoil.run_command('getRecipeInherits', self.mc) or {}
             elif name == 'bbfile_priority':
-                attrvalue = self.tinfoil.run_command('getBbFilePriority') or {}
+                attrvalue = self.tinfoil.run_command('getBbFilePriority', self.mc) or {}
             elif name == 'pkg_dp':
-                attrvalue = self.tinfoil.run_command('getDefaultPreference') or {}
+                attrvalue = self.tinfoil.run_command('getDefaultPreference', self.mc) or {}
             elif name == 'fn_provides':
-                attrvalue = self.tinfoil.run_command('getRecipeProvides') or {}
+                attrvalue = self.tinfoil.run_command('getRecipeProvides', self.mc) or {}
             elif name == 'packages':
-                attrvalue = self.tinfoil.run_command('getRecipePackages') or {}
+                attrvalue = self.tinfoil.run_command('getRecipePackages', self.mc) or {}
             elif name == 'packages_dynamic':
-                attrvalue = self.tinfoil.run_command('getRecipePackagesDynamic') or {}
+                attrvalue = self.tinfoil.run_command('getRecipePackagesDynamic', self.mc) or {}
             elif name == 'rproviders':
-                attrvalue = self.tinfoil.run_command('getRProviders') or {}
+                attrvalue = self.tinfoil.run_command('getRProviders', self.mc) or {}
             else:
                 raise AttributeError("%s instance has no attribute '%s'" % (self.__class__.__name__, name))
 
@@ -180,10 +190,12 @@ class TinfoilCookerAdapter:
 
     def __init__(self, tinfoil):
         self.tinfoil = tinfoil
-        self.collection = self.TinfoilCookerCollectionAdapter(tinfoil)
+        self.multiconfigs = [''] + (tinfoil.config_data.getVar('BBMULTICONFIG') or '').split()
+        self.collections = {}
         self.recipecaches = {}
-        # FIXME all machines
-        self.recipecaches[''] = self.TinfoilRecipeCacheAdapter(tinfoil)
+        for mc in self.multiconfigs:
+            self.collections[mc] = self.TinfoilCookerCollectionAdapter(tinfoil, mc)
+            self.recipecaches[mc] = self.TinfoilRecipeCacheAdapter(tinfoil, mc)
         self._cache = {}
     def __getattr__(self, name):
         # Grab these only when they are requested since they aren't always used
@@ -373,18 +385,13 @@ class Tinfoil:
         if not config_params:
             config_params = TinfoilConfigParameters(config_only=config_only, quiet=quiet)
 
-        cookerconfig = CookerConfiguration()
-        cookerconfig.setConfigParameters(config_params)
-
         if not config_only:
             # Disable local loggers because the UI module is going to set up its own
             for handler in self.localhandlers:
                 self.logger.handlers.remove(handler)
             self.localhandlers = []
 
-        self.server_connection, ui_module = setup_bitbake(config_params,
-                            cookerconfig,
-                            extrafeatures)
+        self.server_connection, ui_module = setup_bitbake(config_params, extrafeatures)
 
         self.ui_module = ui_module
 
@@ -410,9 +417,7 @@ class Tinfoil:
                 self.run_actions(config_params)
                 self.recipes_parsed = True
 
-            self.config_data = bb.data.init()
-            connector = TinfoilDataStoreConnector(self, None)
-            self.config_data.setVar('_remote_data', connector)
+            self.config_data = TinfoilDataStoreConnector(self, 0)
             self.cooker = TinfoilCookerAdapter(self)
             self.cooker_data = self.cooker.recipecaches['']
         else:
@@ -440,11 +445,11 @@ class Tinfoil:
         to initialise Tinfoil and use it with config_only=True first and
         then conditionally call this function to parse recipes later.
         """
-        config_params = TinfoilConfigParameters(config_only=False)
+        config_params = TinfoilConfigParameters(config_only=False, quiet=self.quiet)
         self.run_actions(config_params)
         self.recipes_parsed = True
 
-    def run_command(self, command, *params):
+    def run_command(self, command, *params, handle_events=True):
         """
         Run a command on the server (as implemented in bb.command).
         Note that there are two types of command - synchronous and
@@ -461,7 +466,16 @@ class Tinfoil:
         commandline = [command]
         if params:
             commandline.extend(params)
-        result = self.server_connection.connection.runCommand(commandline)
+        try:
+            result = self.server_connection.connection.runCommand(commandline)
+        finally:
+            while handle_events:
+                event = self.wait_event()
+                if not event:
+                    break
+                if isinstance(event, logging.LogRecord):
+                    if event.taskpid == 0 or event.levelno > logging.INFO:
+                        self.logger.handle(event)
         if result[1]:
             raise TinfoilCommandFailed(result[1])
         return result[0]
@@ -480,7 +494,7 @@ class Tinfoil:
         Wait for an event from the server for the specified time.
         A timeout of 0 means don't wait if there are no events in the queue.
         Returns the next event in the queue or None if the timeout was
-        reached. Note that in order to recieve any events you will
+        reached. Note that in order to receive any events you will
         first need to set the internal event mask using set_event_mask()
         (otherwise whatever event mask the UI set up will be in effect).
         """
@@ -488,11 +502,11 @@ class Tinfoil:
             raise Exception('Not connected to server (did you call .prepare()?)')
         return self.server_connection.events.waitEvent(timeout)
 
-    def get_overlayed_recipes(self):
+    def get_overlayed_recipes(self, mc=''):
         """
         Find recipes which are overlayed (i.e. where recipes exist in multiple layers)
         """
-        return defaultdict(list, self.run_command('getOverlayedRecipes'))
+        return defaultdict(list, self.run_command('getOverlayedRecipes', mc))
 
     def get_skipped_recipes(self):
         """
@@ -501,11 +515,11 @@ class Tinfoil:
         """
         return OrderedDict(self.run_command('getSkippedRecipes'))
 
-    def get_all_providers(self):
-        return defaultdict(list, self.run_command('allProviders'))
+    def get_all_providers(self, mc=''):
+        return defaultdict(list, self.run_command('allProviders', mc))
 
-    def find_providers(self):
-        return self.run_command('findProviders')
+    def find_providers(self, mc=''):
+        return self.run_command('findProviders', mc)
 
     def find_best_provider(self, pn):
         return self.run_command('findBestProvider', pn)
@@ -530,11 +544,11 @@ class Tinfoil:
                 raise bb.providers.NoProvider('Unable to find any recipe file matching "%s"' % pn)
         return best[3]
 
-    def get_file_appends(self, fn):
+    def get_file_appends(self, fn, mc=''):
         """
         Find the bbappends for a recipe file
         """
-        return self.run_command('getFileAppends', fn)
+        return self.run_command('getFileAppends', fn, mc)
 
     def all_recipes(self, mc='', sort=True):
         """
@@ -624,9 +638,6 @@ class Tinfoil:
             appends: True to apply bbappends, False otherwise
             appendlist: optional list of bbappend files to apply, if you
                         want to filter them
-            config_data: custom config datastore to use. NOTE: if you
-                         specify config_data then you cannot use a virtual
-                         specification for fn.
         """
         if self.tracking:
             # Enable history tracking just for the parse operation
@@ -635,8 +646,8 @@ class Tinfoil:
             if appends and appendlist == []:
                 appends = False
             if config_data:
-                dctr = bb.remotedata.RemoteDatastores.transmit_datastore(config_data)
-                dscon = self.run_command('parseRecipeFile', fn, appends, appendlist, dctr)
+                 config_data = bb.data.createCopy(config_data)
+                 dscon = self.run_command('parseRecipeFile', fn, appends, appendlist, config_data.dsindex)
             else:
                 dscon = self.run_command('parseRecipeFile', fn, appends, appendlist)
             if dscon:
@@ -719,35 +730,25 @@ class Tinfoil:
 
         ret = self.run_command('buildTargets', targets, task)
         if handle_events:
+            lastevent = time.time()
             result = False
             # Borrowed from knotty, instead somewhat hackily we use the helper
             # as the object to store "shutdown" on
             helper = bb.ui.uihelper.BBUIHelper()
-            # We set up logging optionally in the constructor so now we need to
-            # grab the handlers to pass to TerminalFilter
-            console = None
-            errconsole = None
-            for handler in self.logger.handlers:
-                if isinstance(handler, logging.StreamHandler):
-                    if handler.stream == sys.stdout:
-                        console = handler
-                    elif handler.stream == sys.stderr:
-                        errconsole = handler
-            format_str = "%(levelname)s: %(message)s"
-            format = bb.msg.BBLogFormatter(format_str)
             helper.shutdown = 0
             parseprogress = None
-            termfilter = bb.ui.knotty.TerminalFilter(helper, helper, console, errconsole, format, quiet=self.quiet)
+            termfilter = bb.ui.knotty.TerminalFilter(helper, helper, self.logger.handlers, quiet=self.quiet)
             try:
                 while True:
                     try:
                         event = self.wait_event(0.25)
                         if event:
+                            lastevent = time.time()
                             if event_callback and event_callback(event):
                                 continue
                             if helper.eventHandler(event):
                                 if isinstance(event, bb.build.TaskFailedSilent):
-                                    logger.warning("Logfile for failed setscene task is %s" % event.logfile)
+                                    self.logger.warning("Logfile for failed setscene task is %s" % event.logfile)
                                 elif isinstance(event, bb.build.TaskFailed):
                                     bb.ui.knotty.print_event_log(event, includelogs, loglines, termfilter)
                                 continue
@@ -763,7 +764,7 @@ class Tinfoil:
                                 if parseprogress:
                                     parseprogress.update(event.progress)
                                 else:
-                                    bb.warn("Got ProcessProgress event for someting that never started?")
+                                    bb.warn("Got ProcessProgress event for something that never started?")
                                 continue
                             if isinstance(event, bb.event.ProcessFinished):
                                 if self.quiet > 1:
@@ -775,7 +776,7 @@ class Tinfoil:
                             if isinstance(event, bb.command.CommandCompleted):
                                 result = True
                                 break
-                            if isinstance(event, bb.command.CommandFailed):
+                            if isinstance(event, (bb.command.CommandFailed, bb.command.CommandExit)):
                                 self.logger.error(str(event))
                                 result = False
                                 break
@@ -787,10 +788,13 @@ class Tinfoil:
                                 self.logger.error(str(event))
                                 result = False
                                 break
-
                         elif helper.shutdown > 1:
                             break
                         termfilter.updateFooter()
+                        if time.time() > (lastevent + (3*60)):
+                            if not self.run_command('ping', handle_events=False):
+                                print("\nUnable to ping server and no events, closing down...\n")
+                                return False
                     except KeyboardInterrupt:
                         termfilter.clearFooter()
                         if helper.shutdown == 1:
@@ -821,18 +825,22 @@ class Tinfoil:
         prepare() has been called, or use a with... block when you create
         the tinfoil object which will ensure that it gets called.
         """
-        if self.server_connection:
-            self.run_command('clientComplete')
-            _server_connections.remove(self.server_connection)
-            bb.event.ui_queue = []
-            self.server_connection.terminate()
-            self.server_connection = None
+        try:
+            if self.server_connection:
+                try:
+                    self.run_command('clientComplete')
+                finally:
+                    _server_connections.remove(self.server_connection)
+                    bb.event.ui_queue = []
+                    self.server_connection.terminate()
+                    self.server_connection = None
 
-        # Restore logging handlers to how it looked when we started
-        if self.oldhandlers:
-            for handler in self.logger.handlers:
-                if handler not in self.oldhandlers:
-                    self.logger.handlers.remove(handler)
+        finally:
+            # Restore logging handlers to how it looked when we started
+            if self.oldhandlers:
+                for handler in self.logger.handlers:
+                    if handler not in self.oldhandlers:
+                        self.logger.handlers.remove(handler)
 
     def _reconvert_type(self, obj, origtypename):
         """
@@ -859,9 +867,7 @@ class Tinfoil:
             newobj = origtype(obj)
 
         if isinstance(newobj, bb.command.DataStoreConnectionHandle):
-            connector = TinfoilDataStoreConnector(self, newobj.dsindex)
-            newobj = bb.data.init()
-            newobj.setVar('_remote_data', connector)
+            newobj = TinfoilDataStoreConnector(self, newobj.dsindex)
 
         return newobj
 

@@ -7,14 +7,15 @@ After=obmc-power-on@%i.target
 Wants=fsi-scan@%i.service
 After=fsi-scan@%i.service
 Conflicts=obmc-chassis-poweroff@%i.target
+Conflicts=obmc-host-stop@%i.target
 ConditionPathExists=!/run/openbmc/chassis@%i-on
 ConditionPathExists=/var/lib/obmc/cfam_overrides
 
 [Service]
-ExecStart=/usr/bin/env openpower-proc-control CFAMOverride
-SyslogIdentifier=openpower-proc-control
+ExecStart=/usr/bin/openpower-proc-control CFAMOverride
 Type=oneshot
 RemainAfterExit=yes
 
 [Install]
 WantedBy=obmc-chassis-poweron@%i.target
+WantedBy=obmc-host-startmin@%i.target

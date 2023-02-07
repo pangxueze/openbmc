@@ -25,7 +25,7 @@ if [ -z "$SYSROOT_SETUP_SCRIPT" ]; then
 	echo "Did you forget to source your build system environment setup script?"
 	exit 1
 fi
-. $SYSROOT_SETUP_SCRIPT meta-ide-support
+. $SYSROOT_SETUP_SCRIPT qemu-helper-native
 PSEUDO_OPTS="-P $OECORE_NATIVE_SYSROOT/usr"
 
 ROOTFS_TARBALL=$1
@@ -69,7 +69,7 @@ fi
 pseudo_state_dir="$SDK_ROOTFS_DIR/../$(basename "$SDK_ROOTFS_DIR").pseudo_state"
 pseudo_state_dir="$(readlink -f $pseudo_state_dir)"
 
-debug_image="`echo $ROOTFS_TARBALL | grep '\-dbg\.tar\.'`"
+debug_image="`echo $ROOTFS_TARBALL | grep '\-dbg\.rootfs\.tar'`"
 
 if [ -e "$pseudo_state_dir" -a -z "$debug_image" ]; then
 	echo "Error: $pseudo_state_dir already exists!"

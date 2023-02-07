@@ -8,13 +8,19 @@
 #
 
 import sys
-import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk, GObject
-from multiprocessing import Queue
+import traceback
+
+try:
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, Gdk, GObject
+except ValueError:
+    sys.exit("FATAL: Gtk version needs to be 3.0")
+except ImportError:
+    sys.exit("FATAL: Gtk ui could not load the required gi python module")
+
 import threading
 from xmlrpc import client
-import time
 import bb
 import bb.event
 
@@ -53,7 +59,12 @@ class PackageReverseDepView(Gtk.TreeView):
         self.current = None
         self.filter_model = model.filter_new()
         self.filter_model.set_visible_func(self._filter)
-        self.sort_model = self.filter_model.sort_new_with_model()
+        # The introspected API was fixed but we can't rely on a pygobject that hides this.
+        # https://gitlab.gnome.org/GNOME/pygobject/-/commit/9cdbc56fbac4db2de78dc080934b8f0a7efc892a
+        if hasattr(Gtk.TreeModelSort, "new_with_model"):
+            self.sort_model = Gtk.TreeModelSort.new_with_model(self.filter_model)
+        else:
+            self.sort_model = self.filter_model.sort_new_with_model()
         self.sort_model.set_sort_column_id(COL_DEP_PARENT, Gtk.SortType.ASCENDING)
         self.set_model(self.sort_model)
         self.append_column(Gtk.TreeViewColumn(label, Gtk.CellRendererText(), text=COL_DEP_PARENT))
@@ -166,7 +177,7 @@ class gtkthread(threading.Thread):
     quit = threading.Event()
     def __init__(self, shutdown):
         threading.Thread.__init__(self)
-        self.setDaemon(True)
+        self.daemon = True
         self.shutdown = shutdown
         if not Gtk.init_check()[0]:
             sys.stderr.write("Gtk+ init failed. Make sure DISPLAY variable is set.\n")
@@ -186,6 +197,7 @@ def main(server, eventHandler, params):
     gtkgui.start()
 
     try:
+        params.updateToServer(server, os.environ.copy())
         params.updateFromServer(server)
         cmdline = params.parseActions()
         if not cmdline:
@@ -202,11 +214,14 @@ def main(server, eventHandler, params):
         if error:
             print("Error running command '%s': %s" % (cmdline, error))
             return 1
-        elif ret != True:
+        elif not ret:
             print("Error running command '%s': returned %s" % (cmdline, ret))
             return 1
     except client.Fault as x:
         print("XMLRPC Fault getting commandline:\n %s" % x)
+        return
+    except Exception as e:
+        print("Exception in startup:\n %s" % traceback.format_exc())
         return
 
     if gtkthread.quit.isSet():
